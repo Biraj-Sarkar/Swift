@@ -17,6 +17,5 @@ dist/
 build/
 .pytest_cache/
 .mypy_cache/
-assets/
 error_analysis_outputs/
 outputs/
