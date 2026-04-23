@@ -1,8 +1,9 @@
-"""Extract frames from a video file using OpenCV."""
+"""Extract frames from a video file using GStreamer or ffmpeg."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import shutil
 import subprocess
@@ -26,6 +27,75 @@ def _make_gstreamer_pipeline(video_path: Path) -> str:
 		"parsebin ! vaapidecodebin ! videoconvert ! video/x-raw,format=BGR ! appsink "
 		"drop=1 sync=false"
 	)
+
+
+def _parse_ffmpeg_fraction(value: str | None) -> float:
+	if not value:
+		return 0.0
+	try:
+		numerator, denominator = value.split("/", maxsplit=1)
+		return float(numerator) / float(denominator)
+	except (ValueError, ZeroDivisionError):
+		try:
+			return float(value)
+		except ValueError:
+			return 0.0
+
+
+def _print_ffmpeg_video_info(video_path: Path, frame_skip: int, max_frames: int | None) -> None:
+	print(f"Video: {video_path.name}")
+
+	ffprobe = shutil.which("ffprobe")
+	if ffprobe is None:
+		print("  Total frames: unknown")
+		print("  FPS: unknown")
+		print("  Resolution: unknown")
+		print(f"  Frame skip: {frame_skip}")
+		if max_frames:
+			print(f"  Max frames to extract: {max_frames}")
+		return
+
+	command = [
+		ffprobe,
+		"-v",
+		"error",
+		"-select_streams",
+		"v:0",
+		"-show_entries",
+		"stream=width,height,avg_frame_rate,nb_frames,duration",
+		"-of",
+		"json",
+		str(video_path),
+	]
+	try:
+		result = subprocess.run(command, check=True, capture_output=True, text=True)
+		probe = json.loads(result.stdout)
+	except (subprocess.CalledProcessError, json.JSONDecodeError):
+		probe = {}
+
+	streams = probe.get("streams", [])
+	stream = streams[0] if streams else {}
+	fps = _parse_ffmpeg_fraction(stream.get("avg_frame_rate"))
+	total_frames = stream.get("nb_frames")
+	if total_frames is None and fps > 0:
+		try:
+			total_frames = str(round(float(stream.get("duration", 0.0)) * fps))
+		except ValueError:
+			total_frames = "unknown"
+
+	width = stream.get("width")
+	height = stream.get("height")
+	resolution = f"{width}x{height}" if width and height else "unknown"
+
+	print(f"  Total frames: {total_frames or 'unknown'}")
+	if fps > 0:
+		print(f"  FPS: {fps:.2f}")
+	else:
+		print("  FPS: unknown")
+	print(f"  Resolution: {resolution}")
+	print(f"  Frame skip: {frame_skip}")
+	if max_frames:
+		print(f"  Max frames to extract: {max_frames}")
 
 
 def _extract_frames_gstreamer(
@@ -95,8 +165,20 @@ def _extract_frames_ffmpeg_cli(
 			"Install ffmpeg or re-encode the source video to H.264/H.265."
 		)
 
+	_print_ffmpeg_video_info(video_path, frame_skip, max_frames)
+
 	existing = {path.name for path in output_dir.glob("frame_*.png")}
-	command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(video_path)]
+	command = [
+		ffmpeg,
+		"-hide_banner",
+		"-loglevel",
+		"error",
+		"-nostats",
+		"-progress",
+		"pipe:1",
+		"-i",
+		str(video_path),
+	]
 
 	filters: list[str] = []
 	if frame_skip > 1:
@@ -110,7 +192,30 @@ def _extract_frames_ffmpeg_cli(
 	command += [str(output_dir / "frame_%06d.png")]
 
 	try:
-		subprocess.run(command, check=True)
+		process = subprocess.Popen(
+			command,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.DEVNULL,
+			text=True,
+		)
+		latest_reported = 0
+		assert process.stdout is not None
+		for line in process.stdout:
+			line = line.strip()
+			if not line.startswith("frame="):
+				continue
+			try:
+				current_reported = int(line.split("=", maxsplit=1)[1])
+			except ValueError:
+				continue
+			while current_reported >= latest_reported + 50:
+				latest_reported += 50
+				print(f"  Extracted {latest_reported} frames...")
+			latest_reported = max(latest_reported, current_reported)
+
+		return_code = process.wait()
+		if return_code != 0:
+			raise subprocess.CalledProcessError(return_code, command)
 	except subprocess.CalledProcessError as exc:
 		raise RuntimeError(f"ffmpeg CLI failed while decoding {video_path}: {exc}") from exc
 
@@ -154,7 +259,7 @@ def extract_frames(
 
 	output_dir.mkdir(parents=True, exist_ok=True)
 
-	if backend not in {"auto", "gstreamer"}:
+	if backend not in {"auto", "gstreamer", "ffmpeg"}:
 		raise ValueError(f"Unsupported backend: {backend}")
 
 	if backend == "gstreamer":
@@ -163,6 +268,15 @@ def extract_frames(
 			raise RuntimeError(
 				"GStreamer capture opened the video but did not decode any frames. Check the pipeline, plugins, "
 				"and whether the input codec is supported by your OpenCV build."
+			)
+		print(f"Extraction complete: {extracted} frames saved to {output_dir}")
+		return extracted
+
+	if backend == "ffmpeg":
+		extracted = _extract_frames_ffmpeg_cli(video_path, output_dir, frame_skip, max_frames)
+		if extracted == 0:
+			raise RuntimeError(
+				"ffmpeg decoded no frames. Check that the input file is readable and contains a supported video stream."
 			)
 		print(f"Extraction complete: {extracted} frames saved to {output_dir}")
 		return extracted
@@ -199,11 +313,11 @@ def main() -> None:
 	)
 	parser.add_argument(
 		"--backend",
-		choices=("auto", "gstreamer"),
+		choices=("auto", "gstreamer", "ffmpeg"),
 		default="auto",
 		help=(
 			"Video backend to use (default: auto; tries GStreamer first and falls back to ffmpeg CLI. "
-			"GStreamer requires OpenCV built with GStreamer support.)"
+			"Use ffmpeg to force the ffmpeg CLI path. GStreamer requires OpenCV built with GStreamer support.)"
 		),
 	)
 
