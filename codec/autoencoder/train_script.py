@@ -19,10 +19,15 @@ from torchvision import transforms
 
 try:
     from .model import MultiLevelAutoencoder
-    from .train import compute_l1_reconstruction_loss, train_step
+    from .train import train_step
+    from ..dataset import SwiftDataset
 except ImportError:
     from model import MultiLevelAutoencoder
-    from train import compute_l1_reconstruction_loss, train_step
+    from train import train_step
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from dataset import SwiftDataset
 
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -84,7 +89,7 @@ def build_dataloaders(args: argparse.Namespace) -> tuple[DataLoader, DataLoader 
             transforms.ToTensor(),
         ]
     )
-    dataset = RecursiveImageDataset(args.train_dir, transform=transform)
+    dataset = SwiftDataset(args.train_dir, transform=transform, calc_mvs=True)
 
     val_loader: DataLoader | None = None
     if args.val_split > 0.0:
@@ -135,9 +140,13 @@ def evaluate_metrics(
     steps = 0
 
     for batch in val_loader:
-        x = batch.to(device=device, non_blocking=True)
-        reconstruction, _, rate_bpp = model(x)
-        loss = compute_l1_reconstruction_loss(reconstruction, x)
+        past, curr, future, mv_past, mv_future = [b.to(device, non_blocking=True) for b in batch]
+        reconstruction, _, rate_bpp = model(
+            curr,
+            ref_frames=(past, future),
+            motion_vectors=(mv_past, mv_future)
+        )
+        loss = F.l1_loss(reconstruction, curr)
         running_l1 += float(loss.item())
         running_rate += float(rate_bpp.item())
         steps += 1
@@ -243,6 +252,9 @@ def main() -> None:
             val_l1=val_l1,
             best_val=best_val,
         )
+
+        # Also save the model
+        model.save_model()
 
         if val_l1 is None:
             print(

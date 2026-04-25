@@ -42,7 +42,7 @@ def _extract_images(batch: torch.Tensor | tuple[torch.Tensor, ...] | list[torch.
 
 def train_step(
     model: MultiLevelAutoencoder,
-    batch: torch.Tensor | tuple[torch.Tensor, ...] | list[torch.Tensor],
+    batch: tuple[torch.Tensor, ...],
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     context: tuple[list[torch.Tensor], list[torch.Tensor]] | None = None,
@@ -52,11 +52,18 @@ def train_step(
     """Run one optimization step with L1 reconstruction and learned rate loss."""
     model.train()
 
-    x = _extract_images(batch).to(device=device, non_blocking=True)
+    # Unpack the SwiftDataset triplet format
+    past, curr, future, mv_past, mv_future = [b.to(device, non_blocking=True) for b in batch]
     optimizer.zero_grad(set_to_none=True)
 
-    reconstruction, _, rate_loss = model(x, context=context, use_entropy_decode=False)
-    reconstruction_loss = compute_l1_reconstruction_loss(reconstruction, x)
+    # Use motion compensation during training
+    reconstruction, _, rate_loss = model(
+        curr,
+        ref_frames=(past, future),
+        motion_vectors=(mv_past, mv_future),
+        use_entropy_decode=False
+    )
+    reconstruction_loss = F.l1_loss(reconstruction, curr)
     loss = reconstruction_loss + rate_weight * rate_loss
 
     loss.backward()

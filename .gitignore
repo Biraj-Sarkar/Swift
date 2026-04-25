@@ -1,8 +1,6 @@
 data/
 .vscode/
 venv/
-codec/icodec/
-codec/laplacian/
 *.pt
 *.pth
 *.mp4

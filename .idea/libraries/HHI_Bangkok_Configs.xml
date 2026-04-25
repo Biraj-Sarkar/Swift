@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="HHI-Bangkok-Configs">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/baselines/svc/MVC-Configs/HHI-Bangkok-Configs.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

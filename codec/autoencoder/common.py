@@ -1,4 +1,4 @@
-"""Shared recurrent blocks and shape helpers."""
+"""Shared recurrent blocks, shape helpers, and temporal warping logic."""
 
 from __future__ import annotations
 
@@ -66,6 +66,48 @@ class ConvLSTMCell(nn.Module):
         h_next = o * torch.tanh(c_next)
         return h_next, c_next
 
+def warp(x: torch.Tensor, flo: torch.Tensor) -> torch.Tensor:
+    """
+    Warp an image or feature map with optical flow.
+    x: [B, C, H, W]
+    flo: [B, 2, H, W]
+    """
+    B, C, H, W = x.size()
+    # mesh grid
+    xx = torch.arange(0, W).view(1, -1).repeat(H, 1)
+    yy = torch.arange(0, H).view(-1, 1).repeat(1, W)
+    xx = xx.view(1, 1, H, W).repeat(B, 1, 1, 1)
+    yy = yy.view(1, 1, H, W).repeat(B, 1, 1, 1)
+    grid = torch.cat((xx, yy), 1).float().to(x.device)
+
+    vgrid = grid + flo
+
+    # scale grid to [-1,1]
+    vgrid[:, 0, :, :] = 2.0 * vgrid[:, 0, :, :].clone() / max(W - 1, 1) - 1.0
+    vgrid[:, 1, :, :] = 2.0 * vgrid[:, 1, :, :].clone() / max(H - 1, 1) - 1.0
+
+    vgrid = vgrid.permute(0, 2, 3, 1)
+    output = F.grid_sample(x, vgrid, align_corners=True)
+    return output
+
+class UNetContext(nn.Module):
+    """UNet for extracting features from warped reference frames."""
+    def __init__(self, in_channels=6):
+        super().__init__()
+        self.enc1 = nn.Conv2d(in_channels, 64, 3, padding=1)
+        self.enc2 = nn.Conv2d(64, 128, 3, stride=2, padding=1)
+        self.enc3 = nn.Conv2d(128, 256, 3, stride=2, padding=1)
+
+        self.dec1 = nn.ConvTranspose2d(256, 128, 4, stride=2, padding=1)
+        self.dec2 = nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1)
+
+    def forward(self, x):
+        e1 = F.relu(self.enc1(x))
+        e2 = F.relu(self.enc2(e1))
+        e3 = F.relu(self.enc3(e2))
+        d1 = F.relu(self.dec1(e3))
+        d2 = F.relu(self.dec2(d1))
+        return [e3, d1, d2] # Multi-scale features
 
 def zero_lstm_state(
     batch: int,
@@ -78,18 +120,5 @@ def zero_lstm_state(
     c = torch.zeros(batch, channels, height, width, device=device)
     return h, c
 
-
 def downsample_shape(height: int, width: int, factor: int) -> tuple[int, int]:
     return max(1, height // factor), max(1, width // factor)
-
-
-def fuse_add(
-    x: torch.Tensor,
-    left: torch.Tensor,
-    right: torch.Tensor,
-    proj: nn.Module,
-) -> torch.Tensor:
-    # Project concatenated context to current feature width then add.
-    ctx = torch.cat([left, right], dim=1)
-    ctx = F.interpolate(ctx, size=x.shape[-2:], mode="bilinear", align_corners=False)
-    return x + proj(ctx)
