@@ -23,8 +23,8 @@ def main():
     client = SwiftClient(host='127.0.0.1', port=5000)
     sock = client.connect()
 
-    # Recurrent States for SwiftDecoder
-    h1 = h2 = h3 = h4 = (torch.zeros(1, 512, 16, 16).to(device), torch.zeros(1, 512, 16, 16).to(device))
+    # Correctly initialize recurrent states with matching spatial scales
+    h1, h2, h3, h4 = decoder.init_states(1, device)
 
     print("Starting video playback loop...")
     bandwidth_mbps = 5.0 # Initial guess
@@ -46,6 +46,12 @@ def main():
             if data is None: break
 
             bitstream = [chunk.to(device) for chunk in data['bitstream']]
+            prediction = data.get('prediction')
+            if prediction is not None:
+                prediction = prediction.to(device)
+            context_unet = data.get('context_unet')
+            if context_unet is not None:
+                context_unet = [feature.to(device) for feature in context_unet]
 
             # Decode
             start_time = time.time()
@@ -54,7 +60,9 @@ def main():
                     bitstream_chunks=bitstream,
                     h1=h1, h2=h2, h3=h3, h4=h4,
                     quality_level=len(bitstream),
-                    exit_at=exit_point
+                    exit_at=exit_point,
+                    prediction=prediction,
+                    context_unet=context_unet,
                 )
                 h1, h2, h3, h4 = result['states']
 

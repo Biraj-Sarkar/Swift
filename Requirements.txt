@@ -1,0 +1,9 @@
+torch
+torchvision
+numpy
+pillow
+opencv-python
+scikit-image
+matplotlib
+psutil
+warp-language

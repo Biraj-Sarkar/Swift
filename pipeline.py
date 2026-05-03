@@ -5,12 +5,14 @@ Simulates a real-world streaming session with Section 4.2 ABR logic.
 
 import os
 import time
+import warp
 import torch
 import torch.nn.functional as F
 from torchvision import io, transforms
 from PIL import Image
 
 from codec.autoencoder.model import MultiLevelAutoencoder
+from codec.autoencoder.common import warp
 from codec.autoencoder.motion import MotionVectorGenerator
 from codec.singleshot.model import SwiftDecoder, SwiftAdaptationPolicy
 from streamer.network_node import SwiftClient, SwiftServer
@@ -65,8 +67,8 @@ def run_live_session(frame_dir="data/original_frames", weights_dir="models"):
     frames = load_frames_from_dir(frame_dir)
     num_frames = len(frames)
 
-    # Recurrent States
-    h1 = h2 = h3 = h4 = (torch.zeros(1, 512, 16, 16).to(device), torch.zeros(1, 512, 16, 16).to(device))
+    # Correctly initialize recurrent states with matching spatial scales
+    h1, h2, h3, h4 = decoder.init_states(1, device)
 
     print(f"Processing {num_frames} frames...")
 
@@ -103,11 +105,20 @@ def run_live_session(frame_dir="data/original_frames", weights_dir="models"):
         # --- CLIENT: DECODING ---
         start_time = time.time()
         with torch.no_grad():
+            # Extract UNet features for temporal fusion
+            combined_context = torch.cat([warp(past.unsqueeze(0).to(device), mv_past),
+                                         warp(future.unsqueeze(0).to(device), mv_future)], dim=1)
+            unet_features = autoencoder.unet(combined_context)
+            prediction = (warp(past.unsqueeze(0).to(device), mv_past) +
+                         warp(future.unsqueeze(0).to(device), mv_future)) / 2.0
+
             result = decoder(
                 bitstream_chunks=bitstream,
                 h1=h1, h2=h2, h3=h3, h4=h4,
                 quality_level=len(bitstream),
-                exit_at=exit_point
+                exit_at=exit_point,
+                prediction=prediction,
+                context_unet=unet_features
             )
             h1, h2, h3, h4 = result['states']
 

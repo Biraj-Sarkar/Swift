@@ -14,20 +14,27 @@ def measure_decoding_speed(model, input_codes, quality_level, num_runs=100):
     """Measures decoding speed in FPS as per Swift paper analysis."""
     model.eval()
     device = next(model.parameters()).device
+    batch = input_codes[0].shape[0] if isinstance(input_codes, (list, tuple)) else input_codes.shape[0]
+
+    def run_once():
+        states = model.init_states(batch, device)
+        return model(input_codes, *states, quality_level=quality_level)
 
     # Warm up
     for _ in range(10):
         with torch.no_grad():
-            _ = model(input_codes, *model.init_hidden(), quality_level=quality_level)
+            _ = run_once()
 
-    torch.cuda.synchronize()
+    if device.type == "cuda":
+        torch.cuda.synchronize()
     start_time = time.time()
 
     for _ in range(num_runs):
         with torch.no_grad():
-            _ = model(input_codes, *model.init_hidden(), quality_level=quality_level)
+            _ = run_once()
 
-    torch.cuda.synchronize()
+    if device.type == "cuda":
+        torch.cuda.synchronize()
     end_time = time.time()
 
     avg_time = (end_time - start_time) / num_runs

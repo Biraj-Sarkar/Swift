@@ -73,7 +73,9 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
     for q_level, exit_at in configs:
         print(f"Evaluating Config: Level={q_level}, Exit={exit_at}...")
         metrics = {'psnr': [], 'ssim': [], 'latency_ms': [], 'bpp': []}
-        h1 = h2 = h3 = h4 = (torch.zeros(1, 512, 16, 16).to(device), torch.zeros(1, 512, 16, 16).to(device))
+
+        # Correctly initialize recurrent states with matching spatial scales
+        h1, h2, h3, h4 = decoder.init_states(1, device)
 
         for i in range(1, len(frame_files) - 1):
             past = load_frame(os.path.join(frames_dir, frame_files[i-1]), transform)
@@ -81,11 +83,22 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
             future = load_frame(os.path.join(frames_dir, frame_files[i+1]), transform)
 
             mv_past, mv_future = mv_gen.generate_triplet_mvs(past, curr, future)
-            _, outputs, rate_bpp = autoencoder(curr.unsqueeze(0).to(device), (past.unsqueeze(0).to(device), future.unsqueeze(0).to(device)), (mv_past, mv_future))
-            bitstream = [out.symbols for out in outputs[:q_level]]
+
+            # Use Autoencoder to get bitstream and context features
+            with torch.no_grad():
+                past_t, curr_t, future_t = past.unsqueeze(0).to(device), curr.unsqueeze(0).to(device), future.unsqueeze(0).to(device)
+                from codec.autoencoder.common import warp
+                warped_past = warp(past_t, mv_past.to(device))
+                warped_future = warp(future_t, mv_future.to(device))
+                combined_context = torch.cat([warped_past, warped_future], dim=1)
+                unet_features = autoencoder.unet(combined_context)
+                prediction = (warped_past + warped_future) / 2.0
+
+                _, outputs, rate_bpp = autoencoder(curr_t, ref_frames=(past_t, future_t), motion_vectors=(mv_past.to(device), mv_future.to(device)))
+                bitstream = [out.symbols for out in outputs[:q_level]]
 
             start_time = time.time()
-            result = decoder(bitstream, h1, h2, h3, h4, q_level, exit_at)
+            result = decoder(bitstream, h1, h2, h3, h4, q_level, exit_at, prediction=prediction, context_unet=unet_features)
             latency = (time.time() - start_time) * 1000
             h1, h2, h3, h4 = result['states']
 

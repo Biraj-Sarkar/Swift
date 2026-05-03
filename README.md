@@ -33,7 +33,7 @@ This project implements a motion-aware, multi-bitrate architecture with an adapt
 
 ### 1. Prerequisites
 ```bash
-pip install torch torchvision psutil pillow numpy scikit-image
+pip install torch torchvision psutil pillow numpy scikit-image opencv-python
 ```
 
 ### 2. Data Preparation

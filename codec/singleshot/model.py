@@ -174,17 +174,36 @@ class SwiftDecoder(nn.Module):
 
         self.conv_final = nn.Conv2d(32, 3, 1) # Full Scale
 
+    @staticmethod
+    def init_states(batch_size, device, height=256, width=256):
+        """Create recurrent states for the fixed spatial hierarchy."""
+        return (
+            (torch.zeros(batch_size, 512, height // 16, width // 16, device=device),
+             torch.zeros(batch_size, 512, height // 16, width // 16, device=device)),
+            (torch.zeros(batch_size, 512, height // 8, width // 8, device=device),
+             torch.zeros(batch_size, 512, height // 8, width // 8, device=device)),
+            (torch.zeros(batch_size, 256, height // 4, width // 4, device=device),
+             torch.zeros(batch_size, 256, height // 4, width // 4, device=device)),
+            (torch.zeros(batch_size, 128, height // 2, width // 2, device=device),
+             torch.zeros(batch_size, 128, height // 2, width // 2, device=device)),
+        )
+
     def forward(self, bitstream_chunks, h1, h2, h3, h4,
-                quality_level=5, exit_at='final', context_unet=None, return_all_exits=False):
+                quality_level=5, exit_at='final', prediction=None, context_unet=None, return_all_exits=False):
         """
         Args:
             bitstream_chunks: List of 5 tensors [N, bits, H, W]
             quality_level: 1-5 (How many bitstream heads to aggregate)
             exit_at: 'ee_1_16', 'ee_1_8', 'ee_1_4', 'ee_1_2', 'final'
+            prediction: The motion-warped prediction frame [N, 3, H, W]
             context_unet: Features from neighboring frames for interpolation
             return_all_exits: If True, returns all intermediate reconstructions (for training)
         """
         results = {'states': (h1, h2, h3, h4), 'all_exits': {}}
+
+        if prediction is None:
+            # Fallback to gray if no prediction provided (not recommended)
+            prediction = torch.zeros((h1[0].shape[0], 3, h1[0].shape[2]*16, h1[0].shape[3]*16), device=h1[0].device) + 0.5
 
         # 1. Aggregate bits (Rate adaptation)
         x = 0
@@ -193,9 +212,13 @@ class SwiftDecoder(nn.Module):
 
         # Level 1: Latent Space (1/16)
         h1 = self.rnn1(x, h1)
-        out_1_16 = self.ee1(h1[0])
+        delta_1_16 = self.ee1(h1[0])
+        pred_1_16 = F.interpolate(prediction, size=delta_1_16.shape[-2:], mode='bilinear', align_corners=False)
+        out_1_16 = (pred_1_16 + delta_1_16).clamp(0, 1)
+
         results['all_exits']['ee_1_16'] = out_1_16
         if exit_at == 'ee_1_16' and not return_all_exits:
+            results['states'] = (h1, h2, h3, h4)
             results['output'] = out_1_16
             results['scale'] = 1/16
             return results
@@ -205,9 +228,13 @@ class SwiftDecoder(nn.Module):
         if self.v_compress and context_unet:
             x = x + context_unet[0]
         h2 = self.rnn2(x, h2)
-        out_1_8 = self.ee2(h2[0])
+        delta_1_8 = self.ee2(h2[0])
+        pred_1_8 = F.interpolate(prediction, size=delta_1_8.shape[-2:], mode='bilinear', align_corners=False)
+        out_1_8 = (pred_1_8 + delta_1_8).clamp(0, 1)
+
         results['all_exits']['ee_1_8'] = out_1_8
         if exit_at == 'ee_1_8' and not return_all_exits:
+            results['states'] = (h1, h2, h3, h4)
             results['output'] = out_1_8
             results['scale'] = 1/8
             return results
@@ -217,9 +244,13 @@ class SwiftDecoder(nn.Module):
         if self.v_compress and context_unet:
             x = x + context_unet[1]
         h3 = self.rnn3(x, h3)
-        out_1_4 = self.ee3(h3[0])
+        delta_1_4 = self.ee3(h3[0])
+        pred_1_4 = F.interpolate(prediction, size=delta_1_4.shape[-2:], mode='bilinear', align_corners=False)
+        out_1_4 = (pred_1_4 + delta_1_4).clamp(0, 1)
+
         results['all_exits']['ee_1_4'] = out_1_4
         if exit_at == 'ee_1_4' and not return_all_exits:
+            results['states'] = (h1, h2, h3, h4)
             results['output'] = out_1_4
             results['scale'] = 1/4
             return results
@@ -229,19 +260,26 @@ class SwiftDecoder(nn.Module):
         if self.v_compress and context_unet:
             x = x + context_unet[2]
         h4 = self.rnn4(x, h4)
-        out_1_2 = self.ee4(h4[0])
+        delta_1_2 = self.ee4(h4[0])
+        pred_1_2 = F.interpolate(prediction, size=delta_1_2.shape[-2:], mode='bilinear', align_corners=False)
+        out_1_2 = (pred_1_2 + delta_1_2).clamp(0, 1)
+
         results['all_exits']['ee_1_2'] = out_1_2
         if exit_at == 'ee_1_2' and not return_all_exits:
+            results['states'] = (h1, h2, h3, h4)
             results['output'] = out_1_2
             results['scale'] = 1/2
             return results
 
         # Level 5: Final x16 Reconstruction (Full)
         x = F.pixel_shuffle(h4[0], 2)
-        out_final = torch.tanh(self.conv_final(x)) / 2
+        delta_final = torch.tanh(self.conv_final(x)) / 2
+        out_final = (prediction + delta_final).clamp(0, 1)
+
         results['all_exits']['final'] = out_final
         results['output'] = out_final
         results['scale'] = 1.0
+        results['states'] = (h1, h2, h3, h4)
 
         return results
 

@@ -2,6 +2,7 @@ import torch
 import os
 import time
 from .network_node import SwiftServer
+from codec.autoencoder.common import warp
 from codec.autoencoder.model import MultiLevelAutoencoder
 from codec.autoencoder.motion import MotionVectorGenerator
 from torchvision import transforms
@@ -59,10 +60,21 @@ def main():
 
         # Encode
         with torch.no_grad():
+            past_t = past.unsqueeze(0).to(device)
+            curr_t = curr.unsqueeze(0).to(device)
+            future_t = future.unsqueeze(0).to(device)
+            mv_past_t = mv_past.to(device)
+            mv_future_t = mv_future.to(device)
+
+            warped_past = warp(past_t, mv_past_t)
+            warped_future = warp(future_t, mv_future_t)
+            prediction = (warped_past + warped_future) / 2.0
+            context_unet = autoencoder.unet(torch.cat([warped_past, warped_future], dim=1))
+
             _, outputs, _ = autoencoder(
-                curr.unsqueeze(0).to(device),
-                ref_frames=(past.unsqueeze(0).to(device), future.unsqueeze(0).to(device)),
-                motion_vectors=(mv_past, mv_future)
+                curr_t,
+                ref_frames=(past_t, future_t),
+                motion_vectors=(mv_past_t, mv_future_t)
             )
 
             # Prepare bitstream up to requested quality
@@ -72,7 +84,9 @@ def main():
         server.send_data(conn, {
             'frame_idx': i,
             'bitstream': bitstream,
-            'quality_level': quality_level
+            'quality_level': quality_level,
+            'prediction': prediction.cpu(),
+            'context_unet': [feature.cpu() for feature in context_unet],
         })
 
     print("Streaming finished.")

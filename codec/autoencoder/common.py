@@ -91,23 +91,43 @@ def warp(x: torch.Tensor, flo: torch.Tensor) -> torch.Tensor:
     return output
 
 class UNetContext(nn.Module):
-    """UNet for extracting features from warped reference frames."""
+    """
+    UNet for extracting features from warped reference frames.
+    Returns features at [1/8, 1/4, 1/2] scales to match Decoder's spatial hierarchy.
+    """
     def __init__(self, in_channels=6):
         super().__init__()
+        # Encoder: Down to 1/8
         self.enc1 = nn.Conv2d(in_channels, 64, 3, padding=1)
-        self.enc2 = nn.Conv2d(64, 128, 3, stride=2, padding=1)
-        self.enc3 = nn.Conv2d(128, 256, 3, stride=2, padding=1)
+        self.enc2 = nn.Conv2d(64, 128, 3, stride=2, padding=1)  # 1/2
+        self.enc3 = nn.Conv2d(128, 256, 3, stride=2, padding=1) # 1/4
+        self.enc4 = nn.Conv2d(256, 512, 3, stride=2, padding=1) # 1/8
 
-        self.dec1 = nn.ConvTranspose2d(256, 128, 4, stride=2, padding=1)
-        self.dec2 = nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1)
+        # Decoder: Up to 1/2
+        self.dec1 = nn.ConvTranspose2d(512, 128, 4, stride=2, padding=1) # 1/4
+        self.dec2 = nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1)  # 1/2
+
+        # Final mapping to match LevelDecoder/SwiftDecoder channel counts
+        # Target channels: 1/8: 128, 1/4: 128, 1/2: 64
+        self.map_1_8 = nn.Conv2d(512, 128, 1)
+        self.map_1_4 = nn.Conv2d(128, 128, 1)
+        self.map_1_2 = nn.Conv2d(64, 64, 1)
 
     def forward(self, x):
         e1 = F.relu(self.enc1(x))
         e2 = F.relu(self.enc2(e1))
         e3 = F.relu(self.enc3(e2))
-        d1 = F.relu(self.dec1(e3))
+        e4 = F.relu(self.enc4(e3))
+
+        d1 = F.relu(self.dec1(e4))
         d2 = F.relu(self.dec2(d1))
-        return [e3, d1, d2] # Multi-scale features
+
+        # Returns features at [1/8, 1/4, 1/2] scales
+        return [
+            self.map_1_8(e4),
+            self.map_1_4(d1),
+            self.map_1_2(d2)
+        ]
 
 def zero_lstm_state(
     batch: int,

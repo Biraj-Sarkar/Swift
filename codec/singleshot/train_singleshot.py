@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
 from .model import SwiftDecoder
+from ..autoencoder.common import warp
 from ..autoencoder.model import MultiLevelAutoencoder
 from ..dataset import SwiftDataset
 
@@ -60,20 +61,39 @@ def train_singleshot(frames_dir="data/original_frames", epochs=50, batch_size=4)
                 )
                 bitstream = [out.symbols for out in outputs]
 
-            # B. Init states (Batch, Channels, H, W)
-            h = (torch.zeros(curr.shape[0], 512, 16, 16).to(device),
-                 torch.zeros(curr.shape[0], 512, 16, 16).to(device))
+            # B. Init states with correct spatial scales
+            h1, h2, h3, h4 = decoder.init_states(
+                curr.shape[0],
+                device,
+                height=curr.shape[-2],
+                width=curr.shape[-1],
+            )
 
             # C. Forward pass through Decoder
-            # We train all exits simultaneously
-            results = decoder(bitstream, h, h, h, h, return_all_exits=True)
+            # Extract UNet features from frozen Autoencoder for context-aware reconstruction
+            with torch.no_grad():
+                warped_past = warp(past, mv_past)
+                warped_future = warp(future, mv_future)
+                combined_context = torch.cat([warped_past, warped_future], dim=1)
+                unet_features = autoencoder.unet(combined_context)
+                prediction = (warped_past + warped_future) / 2.0
+
+            results = decoder(
+                bitstream,
+                h1,
+                h2,
+                h3,
+                h4,
+                prediction=prediction,
+                context_unet=unet_features,
+                return_all_exits=True,
+            )
 
             # D. Multi-Exit Reconstruction Loss
             loss = 0
-            for exit_name, pred in results['all_exits'].items():
-                # Resize original frame to match exit resolution
-                target = F.interpolate(curr, size=pred.shape[-2:], mode='bilinear', align_corners=False)
-                loss += weights[exit_name] * F.l1_loss(pred, target)
+            for exit_name, reconstructed in results['all_exits'].items():
+                target = F.interpolate(curr, size=reconstructed.shape[-2:], mode='bilinear', align_corners=False)
+                loss += weights[exit_name] * F.l1_loss(reconstructed, target)
 
             loss.backward()
             optimizer.step()

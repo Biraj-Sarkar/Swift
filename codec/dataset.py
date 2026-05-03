@@ -24,7 +24,8 @@ class SwiftDataset(Dataset):
             self.transform = transform
 
         if calc_mvs:
-            self.mv_gen = MotionVectorGenerator(use_cuda=torch.cuda.is_available())
+            # Keep dataset outputs on CPU; training/evaluation loops move batches to device.
+            self.mv_gen = MotionVectorGenerator(use_cuda=False)
 
     def __len__(self):
         # We need at least 3 frames for a triplet

@@ -22,17 +22,18 @@ def profile_decoder():
     bits = 32
 
     quality_levels = [1, 2, 3, 4, 5]
-    exit_points = ['1/4', '1/2', 'final']
+    exit_points = ['ee_1_16', 'ee_1_8', 'ee_1_4', 'ee_1_2', 'final']
 
     results = {}
 
     # Warm up
     print("Warming up...")
     dummy_chunks = [torch.randn(1, bits, 16, 16).to(device) for _ in range(5)]
-    h = (torch.zeros(1, 512, 16, 16).to(device), torch.zeros(1, 512, 16, 16).to(device))
+    h1, h2, h3, h4 = decoder.init_states(1, device)
+
     for _ in range(10):
         with torch.no_grad():
-            _ = decoder(dummy_chunks, h, h, h, h, quality_level=5, exit_at='final')
+            _ = decoder(dummy_chunks, h1, h2, h3, h4, quality_level=5, exit_at='final')
 
     print("Profiling iterations...")
     for q in quality_levels:
@@ -41,15 +42,13 @@ def profile_decoder():
         for e in exit_points:
             # Measure time over multiple runs for stability
             iterations = 50
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
+            if device.type == 'cuda':
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
 
             latencies = []
             for _ in range(iterations):
-                h1 = (torch.zeros(1, 512, 16, 16).to(device), torch.zeros(1, 512, 16, 16).to(device))
-                h2 = (torch.zeros(1, 512, 16, 16).to(device), torch.zeros(1, 512, 16, 16).to(device))
-                h3 = (torch.zeros(1, 512, 16, 16).to(device), torch.zeros(1, 512, 16, 16).to(device))
-                h4 = (torch.zeros(1, 512, 16, 16).to(device), torch.zeros(1, 512, 16, 16).to(device))
+                h1, h2, h3, h4 = decoder.init_states(1, device)
 
                 if device.type == 'cuda':
                     start_event.record()

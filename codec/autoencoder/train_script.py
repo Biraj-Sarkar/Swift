@@ -13,6 +13,7 @@ import random
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset, random_split
 from torchvision import transforms
@@ -61,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs.")
     parser.add_argument("--batch-size", type=int, default=8, help="Mini-batch size.")
     parser.add_argument("--image-size", type=int, default=256, help="Resize/crop square size; use multiples of 16.")
-    parser.add_argument("--levels", type=int, default=3, help="Number of coding levels.")
+    parser.add_argument("--levels", type=int, default=5, help="Number of coding levels.")
     parser.add_argument("--bits", type=int, default=32, help="Bits per level for binarizer symbols.")
     parser.add_argument("--lr", type=float, default=5e-4, help="Adam learning rate.")
     parser.add_argument("--weight-decay", type=float, default=0.0, help="Adam weight decay.")
