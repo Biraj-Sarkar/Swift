@@ -29,8 +29,28 @@ def load_frame(path, transform):
     img = Image.open(path).convert('RGB')
     return transform(img)
 
+def save_resized_rgb_copy(src_path: Path, dst_path: Path, size: tuple[int, int]) -> None:
+    """Save a resized RGB copy of src_path to dst_path."""
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(src_path) as img:
+        rgb = img.convert("RGB")
+        rgb = rgb.resize(size, resample=Image.BILINEAR)
+        rgb.save(dst_path)
+
 @torch.no_grad()
 def run_evaluation(frames_dir="data/original_frames", models_dir="models", output_dir="outputs/evaluation"):
+    # Resolve relative paths against the Swift package root (swift/).
+    swift_root = Path(__file__).resolve().parents[1]
+    frames_dir = Path(frames_dir)
+    models_dir = Path(models_dir)
+    output_dir = Path(output_dir)
+    if not frames_dir.is_absolute():
+        frames_dir = swift_root / frames_dir
+    if not models_dir.is_absolute():
+        models_dir = swift_root / models_dir
+    if not output_dir.is_absolute():
+        output_dir = swift_root / output_dir
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"--- Swift Performance Evaluation (Device: {device}) ---")
 
@@ -69,6 +89,8 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
 
     recon_frames_dir = Path(output_dir) / "reconstructed_frames"
     recon_frames_dir.mkdir(parents=True, exist_ok=True)
+    resized_targets_dir = Path(output_dir) / "targets_resized"
+    resized_targets_dir.mkdir(parents=True, exist_ok=True)
 
     for q_level, exit_at in configs:
         print(f"Evaluating Config: Level={q_level}, Exit={exit_at}...")
@@ -111,6 +133,11 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
             if exit_at == 'final':
                 recon_img.save(recon_frames_dir / f"recon_{frame_files[i]}")
 
+                # Also save a resized copy of the target frame so deep analysis compares same shapes.
+                target_src = Path(frames_dir) / frame_files[i]
+                target_dst = resized_targets_dir / f"target_{frame_files[i]}"
+                save_resized_rgb_copy(target_src, target_dst, size=(256, 256))
+
             metrics['psnr'].append(psnr_metric(orig_np, recon_np))
             metrics['ssim'].append(ssim_metric(orig_np, recon_np, channel_axis=2))
             metrics['latency_ms'].append(latency)
@@ -133,14 +160,14 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
     # 5. Deep Error Analysis (Color, Pixel, Temporal)
     print("\n--- Running Deep Error Analysis ---")
     sample_idx = len(frame_files) // 2
-    target_sample = Path(frames_dir) / frame_files[sample_idx]
+    target_sample = resized_targets_dir / f"target_{frame_files[sample_idx]}"
     pred_sample = recon_frames_dir / f"recon_{frame_files[sample_idx]}"
 
     if pred_sample.exists():
         pixel_results = run_pixel_analysis(target_sample, pred_sample, Path(output_dir) / "heatmaps")
         color_results = run_color_analysis(target_sample, pred_sample, Path(output_dir))
 
-        target_paths = [Path(frames_dir) / f for f in frame_files[1:-1]]
+        target_paths = [resized_targets_dir / f"target_{f}" for f in frame_files[1:-1]]
         pred_paths = [recon_frames_dir / f"recon_{f}" for f in frame_files[1:-1]]
         temporal_results = run_temporal_analysis(target_paths, pred_paths)
 

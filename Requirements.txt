@@ -6,4 +6,5 @@ opencv-python
 scikit-image
 matplotlib
 psutil
-warp-language
+warp-lang
+yt-dlp
