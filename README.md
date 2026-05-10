@@ -33,7 +33,7 @@ This project implements a motion-aware, multi-bitrate architecture with an adapt
 
 ### 1. Prerequisites
 ```bash
-pip install torch torchvision psutil pillow numpy scikit-image opencv-python
+pip install -r requirements.txt
 ```
 
 ### 2. Data Preparation
@@ -58,13 +58,13 @@ Swift uses a two-stage training process.
 ### Stage 1: Multi-Level Autoencoder (Server)
 Trains the model to compress motion-compensated residuals.
 ```bash
-python codec/autoencoder/train_script.py --train-dir data/original_frames --epochs 50 --batch-size 4
+python -m codec.autoencoder.train_script.py --train-dir data/original_frames --epochs 50 --batch-size 8
 ```
 
 ### Stage 2: Singleshot Decoder (Client)
 Trains the multi-exit decoder using the frozen autoencoder from Stage 1.
 ```bash
-python -m codec.singleshot.train_singleshot
+python -m codec.singleshot.train_singleshot --epochs 50 --batch-size 8
 ```
 
 ---
@@ -94,7 +94,7 @@ Generate PSNR, SSIM, and Latency reports across the RD-C spectrum:
 ```bash
 python scripts/evaluate.py
 ```
-Results are saved to `outputs/evaluation/metrics.json`.
+Results are saved to `outputs/evaluation`.
 
 ---
 

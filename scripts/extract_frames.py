@@ -183,7 +183,6 @@ def _extract_frames_ffmpeg_cli(
 	filters: list[str] = []
 	if frame_skip > 1:
 		filters.append(f"select='not(mod(n\\,{frame_skip}))'")
-	filters.append("format=bgr24")
 	if filters:
 		command += ["-vf", ",".join(filters)]
 	command += ["-vsync", "0"]
@@ -195,7 +194,7 @@ def _extract_frames_ffmpeg_cli(
 		process = subprocess.Popen(
 			command,
 			stdout=subprocess.PIPE,
-			stderr=subprocess.DEVNULL,
+			stderr=subprocess.PIPE,
 			text=True,
 		)
 		latest_reported = 0
@@ -215,6 +214,8 @@ def _extract_frames_ffmpeg_cli(
 
 		return_code = process.wait()
 		if return_code != 0:
+			stderr_output = process.stderr.read()
+			print(stderr_output)
 			raise subprocess.CalledProcessError(return_code, command)
 	except subprocess.CalledProcessError as exc:
 		raise RuntimeError(f"ffmpeg CLI failed while decoding {video_path}: {exc}") from exc

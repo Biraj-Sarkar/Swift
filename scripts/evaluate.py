@@ -25,11 +25,20 @@ from evaluation_analysis import (
     run_temporal_analysis
 )
 
+PSNR_IDENTICAL_FRAME_DB = 100.0
+
 def load_frame(path, transform):
     img = Image.open(path).convert('RGB')
     return transform(img)
 
-def save_resized_rgb_copy(src_path: Path, dst_path: Path, size: tuple[int, int]) -> None:
+def finite_psnr(target, pred) -> float:
+    """Return a finite PSNR value so duplicate/static frames do not poison averages."""
+    value = psnr_metric(target, pred)
+    if np.isfinite(value):
+        return float(value)
+    return PSNR_IDENTICAL_FRAME_DB
+
+def save_resized_rgb_copy(src_path, dst_path, size) -> None:
     """Save a resized RGB copy of src_path to dst_path."""
     dst_path.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(src_path) as img:
@@ -59,7 +68,7 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
     decoder = SwiftDecoder(v_compress=True).to(device)
 
     ae_path = os.path.join(models_dir, "autoencoder.pth")
-    sd_path = os.path.join(models_dir, "singleshot.pth")
+    sd_path = os.path.join(models_dir, "singleshot_latest.pth")
 
     if os.path.exists(ae_path):
         autoencoder.load_state_dict(torch.load(ae_path, map_location=device))
@@ -83,8 +92,10 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
         print("Error: Not enough frames for evaluation.")
         return
 
-    # 3. RD-C Profile configurations
-    configs = [(5, 'final'), (3, 'ee_1_4'), (1, 'ee_1_16')]
+    # 3. Quality sweep configurations.
+    # Keep decoder depth fixed when comparing quality levels; otherwise PSNR mixes
+    # bitrate-layer quality with early-exit reconstruction quality.
+    configs = [(1, 'final'), (3, 'final'), (5, 'final')]
     all_results = []
 
     recon_frames_dir = Path(output_dir) / "reconstructed_frames"
@@ -97,7 +108,7 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
         metrics = {'psnr': [], 'ssim': [], 'latency_ms': [], 'bpp': []}
 
         # Correctly initialize recurrent states with matching spatial scales
-        h1, h2, h3, h4 = decoder.init_states(1, device)
+        h1, h2, h3, h4 = decoder.init_states(1, device, height=256, width=256)
 
         for i in range(1, len(frame_files) - 1):
             past = load_frame(os.path.join(frames_dir, frame_files[i-1]), transform)
@@ -116,7 +127,7 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
                 unet_features = autoencoder.unet(combined_context)
                 prediction = (warped_past + warped_future) / 2.0
 
-                _, outputs, rate_bpp = autoencoder(curr_t, ref_frames=(past_t, future_t), motion_vectors=(mv_past.to(device), mv_future.to(device)))
+                _, outputs, _ = autoencoder(curr_t, ref_frames=(past_t, future_t), motion_vectors=(mv_past.to(device), mv_future.to(device)))
                 bitstream = [out.symbols for out in outputs[:q_level]]
 
             start_time = time.time()
@@ -138,10 +149,11 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
                 target_dst = resized_targets_dir / f"target_{frame_files[i]}"
                 save_resized_rgb_copy(target_src, target_dst, size=(256, 256))
 
-            metrics['psnr'].append(psnr_metric(orig_np, recon_np))
+            metrics['psnr'].append(finite_psnr(orig_np, recon_np))
             metrics['ssim'].append(ssim_metric(orig_np, recon_np, channel_axis=2))
             metrics['latency_ms'].append(latency)
-            metrics['bpp'].append(float(rate_bpp))
+            selected_bpp = sum(out.rate_bpp for out in outputs[:q_level])
+            metrics['bpp'].append(float(selected_bpp.detach().cpu()))
 
         summary = {
             'config': {'quality_level': q_level, 'exit_at': exit_at},
@@ -155,7 +167,7 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
     # 4. Save Swift Results
     os.makedirs(output_dir, exist_ok=True)
     with open(os.path.join(output_dir, "metrics.json"), 'w') as f:
-        json.dump(all_results, f, indent=4)
+        json.dump(all_results, f, indent=4, allow_nan=False)
 
     # 5. Deep Error Analysis (Color, Pixel, Temporal)
     print("\n--- Running Deep Error Analysis ---")
@@ -177,7 +189,7 @@ def run_evaluation(frames_dir="data/original_frames", models_dir="models", outpu
             "temporal": temporal_results
         }
         with open(os.path.join(output_dir, "deep_analysis.json"), 'w') as f:
-            json.dump(deep_analysis, f, indent=4)
+            json.dump(deep_analysis, f, indent=4, allow_nan=False)
         print("Deep analysis complete.")
 
     # 6. Final Suite

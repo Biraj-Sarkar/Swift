@@ -1,0 +1,17 @@
+{
+    "pixel": {
+        "mean_pixel_error": 23.8760986328125,
+        "max_pixel_error": 156.0
+    },
+    "color": {
+        "mean_y_error": 23.374603271484375,
+        "mean_u_error": 7.106658935546875,
+        "mean_v_error": 4.1440582275390625
+    },
+    "temporal": {
+        "psnr_variance": 85.7790389304025,
+        "psnr_min": 13.808845958613421,
+        "psnr_max": 100.0,
+        "psnr_mean": 23.40208315477701
+    }
+}

@@ -15,5 +15,6 @@ dist/
 build/
 .pytest_cache/
 .mypy_cache/
-error_analysis_outputs/
-outputs/
+outputs/evaluation/reconstructed_frames
+outputs/evaluation/targets_resized
+models/

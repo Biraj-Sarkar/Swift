@@ -6,13 +6,32 @@ Calculates H.264 PSNR using FFmpeg and provides hooks for SVC/SHVC.
 import os
 import torch
 import json
+import re
 import numpy as np
 import subprocess
 from pathlib import Path
 from PIL import Image
 from skimage.metrics import peak_signal_noise_ratio as psnr_metric
 
-def get_h264_baseline_metrics(frames_dir, crf=23):
+PSNR_IDENTICAL_FRAME_DB = 100.0
+
+def _finite_psnr(target, pred):
+    value = psnr_metric(target, pred)
+    if np.isfinite(value):
+        return float(value)
+    return PSNR_IDENTICAL_FRAME_DB
+
+def _first_frame_number(frames_dir):
+    frame_files = sorted(Path(frames_dir).glob("frame_*.png"))
+    if not frame_files:
+        raise FileNotFoundError(f"No frame_*.png files found in {frames_dir}")
+
+    match = re.search(r"frame_(\d+)\.png$", frame_files[0].name)
+    if not match:
+        raise ValueError(f"Unexpected frame filename: {frame_files[0].name}")
+    return int(match.group(1))
+
+def get_h264_baseline_metrics(frames_dir, crf=23, framerate=24):
     """
     Actually runs FFmpeg to compress the frames and calculates real PSNR.
     """
@@ -22,15 +41,24 @@ def get_h264_baseline_metrics(frames_dir, crf=23):
     os.makedirs(recon_dir, exist_ok=True)
 
     try:
+        start_number = _first_frame_number(frames_dir)
+
         # 1. Compress frames to MP4 (H.264)
-        # Using glob pattern for frames
+        # Extracted frames are named frame_000001.png on the ffmpeg path, so
+        # explicitly tell ffmpeg where the image sequence starts.
         cmd_compress = [
-            'ffmpeg', '-y', '-framerate', '30', '-i', str(frames_dir / '%*.png'),
+            'ffmpeg', '-y',
+            '-framerate', str(framerate),
+            '-start_number', str(start_number),
+            '-i', str(frames_dir / 'frame_%06d.png'),
             '-c:v', 'libx264', '-crf', str(crf), '-pix_fmt', 'yuv420p', output_mp4
         ]
         subprocess.run(cmd_compress, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        encoded_size_bytes = os.path.getsize(output_mp4)
 
         # 2. Decompress back to frames to measure distortion
+        for old_frame in recon_dir.glob("frame_*.png"):
+            old_frame.unlink()
         cmd_decompress = [
             'ffmpeg', '-y', '-i', output_mp4, str(recon_dir / 'frame_%04d.png')
         ]
@@ -47,14 +75,20 @@ def get_h264_baseline_metrics(frames_dir, crf=23):
             # Standardize size for comparison
             if o_img.shape != r_img.shape:
                 r_img = np.array(Image.fromarray(r_img).resize((o_img.shape[1], o_img.shape[0])))
-            psnrs.append(psnr_metric(o_img, r_img))
+            psnrs.append(_finite_psnr(o_img, r_img))
 
         # Cleanup
         if os.path.exists(output_mp4): os.remove(output_mp4)
 
+        if not psnrs:
+            return None
+
+        height, width = np.array(Image.open(orig_files[0]).convert('RGB')).shape[:2]
+        bpp = (encoded_size_bytes * 8.0) / max(1, len(psnrs) * height * width)
+
         return {
             "psnr": round(np.mean(psnrs), 2),
-            "bpp": 0.15 # Approx for CRF 23, could be calculated from mp4 file size
+            "bpp": round(float(bpp), 4)
         }
     except Exception as e:
         print(f"H.264 Baseline Error: {e}. Ensure ffmpeg is installed.")
@@ -99,7 +133,7 @@ def evaluate_against_baselines(frames_dir="data/original_frames", swift_metrics_
     output_path = "outputs/evaluation/baseline_comparison.json"
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w') as f:
-        json.dump(report, f, indent=4)
+        json.dump(report, f, indent=4, allow_nan=False)
 
     print(f"Results saved to {output_path}")
 

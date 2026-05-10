@@ -3,7 +3,7 @@ import cv2
 from pathlib import Path
 from .compute_metrics import load_rgb_image
 
-def run_color_analysis(target_path: Path, pred_path: Path, output_dir: Path):
+def run_color_analysis(target_path, pred_path, output_dir):
     target = load_rgb_image(target_path)
     pred = load_rgb_image(pred_path)
 

@@ -2,7 +2,7 @@ import numpy as np
 from pathlib import Path
 from .compute_metrics import load_rgb_image
 
-def run_temporal_analysis(frame_paths: list[Path], pred_paths: list[Path]):
+def run_temporal_analysis(frame_paths, pred_paths):
     """Analyze error stability across a sequence of frames."""
     psnrs = []
 

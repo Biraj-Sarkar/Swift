@@ -1,0 +1,32 @@
+[
+    {
+        "config": {
+            "quality_level": 1,
+            "exit_at": "final"
+        },
+        "avg_psnr": 22.06,
+        "avg_ssim": 0.4392,
+        "avg_latency": 3.19,
+        "avg_bpp": 0.0435
+    },
+    {
+        "config": {
+            "quality_level": 3,
+            "exit_at": "final"
+        },
+        "avg_psnr": 22.54,
+        "avg_ssim": 0.469,
+        "avg_latency": 3.84,
+        "avg_bpp": 0.1047
+    },
+    {
+        "config": {
+            "quality_level": 5,
+            "exit_at": "final"
+        },
+        "avg_psnr": 23.4,
+        "avg_ssim": 0.5085,
+        "avg_latency": 4.52,
+        "avg_bpp": 0.1631
+    }
+]

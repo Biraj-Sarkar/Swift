@@ -41,7 +41,7 @@ def measure_decoding_speed(model, input_codes, quality_level, num_runs=100):
     fps = 1.0 / avg_time
     return fps
 
-def compute_rd_curve(quality_metrics: list[dict], bitrates: list[float]):
+def compute_rd_curve(quality_metrics, bitrates):
     """Computes Rate-Distortion statistics."""
     # quality_metrics: list of dicts containing PSNR, SSIM etc. for each quality level
     # bitrates: list of bitrates in bpp or kbps for each level
